@@ -53,20 +53,30 @@ Students finishing Grade 12 struggle to map their interests, eligibility, and co
 - **Auth:** JWT + Email OTP / Google OAuth  
 - **Deployment:** Frontend → Vercel/Netlify, Backend → Render  
 
-**Diagram:**  
+**Diagram (Mermaid):**  
 
-```plaintext
-[React Frontend]  
-      │ HTTPS  
-      ▼  
-[API Gateway (Node.js + Express)]  
-      │  
- ┌────┼──────┐  
- │    │      │  
- ▼    ▼      ▼  
-[Reco Service]  [MongoDB Atlas]  [Redis Cache]  
- │                  │  
- └─────>[S3 / Cloud Storage]  
+```mermaid
+flowchart LR
+    subgraph Client
+        A[React Frontend (CRA)]
+    end
+
+    subgraph Platform
+        B[API Gateway
+Node.js + Express]
+        C[Reco Service]
+        D[(MongoDB Atlas)]
+        E[(Redis Cache)]
+        F[(S3 / Cloud Storage)]
+    end
+
+    A -- HTTPS --> B
+    B --> C
+    B --> D
+    B --> E
+    C --> D
+    C --> E
+    C --> F
 ```
 
 ---
@@ -107,6 +117,18 @@ Students finishing Grade 12 struggle to map their interests, eligibility, and co
 ```json
 { "_id": ObjectId, "recommendation_id": ObjectId, "item_program_id": ObjectId, "label": 1, "comment": "string", "created_at": ISODate }
 ```  
+
+**Entity Relationships (Mermaid):**  
+```mermaid
+erDiagram
+    USERS ||--o{ STUDENTS : has
+    STUDENTS ||--o{ PREFERENCES : sets
+    STUDENTS ||--o{ RECOMMENDATIONS : receives
+    UNIVERSITIES ||--o{ PROGRAMS : offers
+    RECOMMENDATIONS ||--o{ RECO_ITEMS : contains
+    RECO_ITEMS }o--|| PROGRAMS : refers_to
+    RECOMMENDATIONS ||--o{ FEEDBACK : gets
+```
 
 ---
 
@@ -155,6 +177,16 @@ Students finishing Grade 12 struggle to map their interests, eligibility, and co
 
 **Caching:** Redis (top-K per student + preference hash, TTL 10 min)  
 
+**Scoring (Pseudo):**  
+```text
+score(program, prefs) = gate(eligibility) * (
+    w_fees * normalize(1/annual_fee) +
+    w_ranking * normalize(-nirf_rank) +
+    w_placements * normalize(median_ctc_lpa) +
+    w_distance * normalize(-distance_km)
+)
+```
+
 ---
 
 ## 7) Frontend Components (React)  
@@ -182,20 +214,48 @@ Students finishing Grade 12 struggle to map their interests, eligibility, and co
 
 ## 9) Sequence Diagrams  
 
-### Generate Recommendation  
-User → React: submit preferences  
-React → API: POST /recommendations/generate  
-API → RecoService: fetch student & programs  
-RecoService → MongoDB: filter & fetch programs  
-RecoService → Redis: cache results  
-API → React: return recommendation list  
-React → User: display  
+### Generate Recommendation (Mermaid)  
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant R as React App
+    participant API as API Gateway (Express)
+    participant RS as Reco Service
+    participant DB as MongoDB
+    participant C as Redis
 
-### Feedback  
-User → React: thumbs up/down  
-React → API: POST /recommendations/:id/feedback  
-API → MongoDB: store feedback  
-Worker → RecoService: retrain ranking weekly  
+    U->>R: Submit preferences
+    R->>API: POST /recommendations/generate
+    API->>DB: Fetch student + preferences
+    API->>RS: Request recommendations
+    RS->>DB: Filter & fetch candidate programs
+    RS->>C: Check cache (top-K for prefs hash)
+    alt cache miss
+        RS->>DB: Compute scores from data
+        RS-->>C: Store top-K (TTL 10m)
+    end
+    RS-->>API: Return ranked list + explanations
+    API-->>R: 200 OK (recommendation list)
+    R-->>U: Display results
+```
+
+### Feedback (Mermaid)  
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant R as React App
+    participant API as API Gateway (Express)
+    participant DB as MongoDB
+    participant W as Worker (Cron)
+    participant RS as Reco Service
+
+    U->>R: Thumbs up/down + comment
+    R->>API: POST /recommendations/:id/feedback
+    API->>DB: Persist feedback
+    W-->>RS: Weekly trigger for L2R retraining
+    RS->>DB: Pull labeled data
+    RS-->>DB: Update model params/weights
+```
 
 ---
 
@@ -208,39 +268,55 @@ Worker → RecoService: retrain ranking weekly
 
 ---
 
-## 11) User Flow Diagram  
+## 11) User Flow Diagram (Mermaid)  
 
-Start → [Landing Page / Info] → [Signup/Login]  
-- Email OTP → verify → create JWT  
-- Google OAuth → create JWT  
+```mermaid
+flowchart TD
+    START([Start])
+    LP[Landing Page / Info]
+    AUTH[Signup / Login]
+    OTP[Email OTP -> Verify -> JWT]
+    OAUTH[Google OAuth -> JWT]
+    OW[Onboarding Wizard]
+    PI[Personal Info]
+    AS[Academic Scores]
+    PREF[Preferences]
+    RSV[Review & Submit]
+    PSB[Preferences Saved -> Backend]
+    GEN[Generate Recommendations]
+    HCF[Hard Constraints Filter]
+    FS[Feature Scoring]
+    SEM[Optional Semantic Match]
+    CFS[Compute Final Score]
+    CACHE[Cache Top-K in Redis]
+    DISP[Display Recommendations]
+    CARDS[RecoList Cards]
+    EXPL[Explanation Modal]
+    ACT[Actions: Bookmark / Compare / Feedback]
+    REC[User Interaction Recorded]
+    FB[Feedback stored in MongoDB]
+    L2R[Optional L2R retraining]
+    WHATIF[Refinement / What-If]
+    SLIDERS[Adjust Weight Sliders]
+    CONSTR[Add/Remove Constraints]
+    REGEN[Regenerate Recommendations]
+    EXPORT[Export / Compare / Final Shortlist]
+    END([End])
 
-→ [Onboarding Wizard]  
-- Personal Info  
-- Academic Scores  
-- Preferences  
-- Review & Submit  
+    START --> LP --> AUTH
+    AUTH --> OTP
+    AUTH --> OAUTH
+    OTP --> OW
+    OAUTH --> OW
+    OW --> PI --> AS --> PREF --> RSV --> PSB --> GEN
+    GEN --> HCF --> FS --> SEM --> CFS --> CACHE --> DISP
+    DISP --> CARDS --> EXPL --> ACT --> REC
+    REC --> FB --> L2R
+    ACT --> WHATIF
+    WHATIF --> SLIDERS --> CONSTR --> REGEN --> GEN
+    DISP --> EXPORT --> END
+```
 
-→ [Preferences Saved → Backend]  
-→ [Generate Recommendations]  
-- Hard Constraints Filter  
-- Feature Scoring  
-- Optional Semantic Match  
-- Compute Final Score  
-- Cache Top-K in Redis  
+---
 
-→ [Display Recommendations]  
-- RecoList Cards  
-- Explanation Modal  
-- Actions: Bookmark / Compare / Feedback  
-
-→ [User Interaction Recorded]  
-- Feedback stored in MongoDB  
-- Optional L2R retraining  
-
-→ [Refinement / What-If]  
-- Adjust Weight Sliders  
-- Add/Remove Constraints  
-- Regenerate Recommendations  
-
-→ [Export / Compare / Final Shortlist]  
-→ End  
+*This document contains the complete LLD with full diagrams embedded using Mermaid for easy rendering on GitHub and other Markdown viewers that support Mermaid.*
